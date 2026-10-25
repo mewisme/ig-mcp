@@ -14,7 +14,9 @@ func openPrivateFile(path string, flags int, _ os.FileMode) (*os.File, error) {
 	}
 	access := uint32(windows.GENERIC_READ)
 	if flags&(os.O_RDWR|os.O_WRONLY) != 0 {
-		access |= windows.GENERIC_WRITE
+		// enforcePrivateHandle updates the DACL of the lock file through this
+		// handle. SetSecurityInfo requires WRITE_DAC; GENERIC_WRITE is not enough.
+		access |= windows.GENERIC_WRITE | windows.WRITE_DAC
 	}
 	creation := uint32(windows.OPEN_EXISTING)
 	if flags&os.O_CREATE != 0 {
