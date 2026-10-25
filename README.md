@@ -4,32 +4,33 @@ Instagram Direct Messages over MCP, with one tool per operation. Built on [mautr
 
 ## Install
 
-Download the archive for your OS and CPU from [GitHub Releases (latest)](https://github.com/mewisme/ig-mcp/releases/latest). Linux/macOS archives are `.tar.gz`; Windows archives are `.zip`. Each OS supports `amd64` (x64) and `arm64`. Replace `VERSION` with the version in the downloaded filename.
+Download and install the latest binary directly from [GitHub Releases](https://github.com/mewisme/ig-mcp/releases/latest). No Go toolchain is required.
 
-**Linux (x64 example):**
-
-```sh
-tar -xzf ig-mcp_VERSION_linux_amd64.tar.gz
-./ig-mcp --help
-```
-
-**macOS (Apple Silicon example):**
+**Linux / macOS**
 
 ```sh
-tar -xzf ig-mcp_VERSION_darwin_arm64.tar.gz
-./ig-mcp --help
+curl -fsSL https://get.mewis.me/ig-mcp.sh | sh
 ```
 
-**Windows (PowerShell, x64 example):**
+**Windows PowerShell**
 
 ```powershell
-Expand-Archive .\ig-mcp_VERSION_windows_amd64.zip -DestinationPath .
-.\ig-mcp.exe --help
+irm https://get.mewis.me/ig-mcp.ps1 | iex
 ```
 
-The commands below use `./ig-mcp` from the extracted directory on Linux/macOS. On Windows, use `.\ig-mcp.exe` instead. You can omit the prefix after adding the executable to `PATH`.
+Then run `ig-mcp --help`. The installer places `ig-mcp` in your user-level bin directory; you may need to reopen your terminal or add that directory to `PATH`. You can also download the `.tar.gz` (Linux/macOS) or `.zip` (Windows) archive manually from GitHub Releases.
 
-**Release availability:** binaries are published from version tags (for example `v0.1.0`). If no release is listed yet, build from source using the Development section below.
+To **uninstall** only the executable (your saved Instagram session is preserved):
+
+```sh
+curl -fsSL https://get.mewis.me/ig-mcp.sh | sh -s -- --uninstall
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://get.mewis.me/ig-mcp.ps1))) -Uninstall
+```
+
+The installer requires an existing GitHub Release. If no release has been published yet, build from source using the Development section below.
 
 ## Quick start
 
@@ -43,14 +44,14 @@ The commands below use `./ig-mcp` from the extracted directory on Linux/macOS. O
    CONTROL_PLANE_API_KEY=...
    ```
 
-   The release archive includes `.env.example`; you can copy it to `.env.local` and fill only the settings you use. Skip this file if you prefer entering login details interactively and using stdio. Do not commit `.env.local`.
+   The [`.env.example`](.env.example) template is available in the repository and manual release archives. You can copy it to `.env.local` and fill only the settings you use. Skip this file if you prefer entering login details interactively and using stdio. Do not commit `.env.local`.
 
 2. **Log in**, using browser cookies or Android credentials:
 
    ```sh
-   ./ig-mcp login --method cookie
+   ig-mcp login --method cookie
    # Alternatively:
-   ./ig-mcp login --method android
+   ig-mcp login --method android
    ```
 
    Login requires an interactive terminal. Missing credential variables are prompted for; successful login verifies and saves the Instagram session and prints the account name/ID when available.
@@ -58,7 +59,7 @@ The commands below use `./ig-mcp` from the extracted directory on Linux/macOS. O
 3. **Check the saved session:**
 
    ```sh
-   ./ig-mcp status
+   ig-mcp status
    ```
 
    `session_saved` means local credentials exist, not that Instagram was contacted; `not_logged_in` means no session was found. The running server validates the session.
@@ -66,9 +67,9 @@ The commands below use `./ig-mcp` from the extracted directory on Linux/macOS. O
 4. **Start the MCP server:**
 
    ```sh
-   ./ig-mcp serve
+   ig-mcp serve
    # Or for a local MCP client, without OpenAI Tunnel:
-   ./ig-mcp serve --transport stdio
+   ig-mcp serve --transport stdio
    ```
 
    `serve` defaults to `--transport openai`, which requires the tunnel ID and API key above. Stdio writes protocol output to stdout and diagnostics to stderr.
@@ -78,8 +79,8 @@ The commands below use `./ig-mcp` from the extracted directory on Linux/macOS. O
 The CLI loads optional `.env` and `.env.local` from the **current working directory**. Precedence (highest first): existing process environment > `--env-path` > `.env.local` > `.env`. Missing default files are ignored; an explicitly requested file must exist and be readable.
 
 ```sh
-./ig-mcp --env-path ./config/production.env serve
-./ig-mcp status --env-path ./config/production.env
+ig-mcp --env-path ./config/production.env serve
+ig-mcp status --env-path ./config/production.env
 ```
 
 Login methods are `cookie`, `android` (default), and `web`. `IG_MCP_LOGIN_COOKIES` accepts a complete browser Cookie header or JSON cookie map. Android/web login can use `IG_MCP_LOGIN_IDENTITY` (username, email or phone), `IG_MCP_LOGIN_PASSWORD`, and `IG_MCP_LOGIN_TOTP_SECRET` (authenticator setup secret or `otpauth://` URI, not a six-digit code); absent values are prompted for. Unsupported CAPTCHA/checkpoint challenges must be completed in Instagram before retrying cookie login. These variables are only for CLI login: `serve` never logs in automatically.
