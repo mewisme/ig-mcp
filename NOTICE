@@ -1,0 +1,24 @@
+Third-party software notices for ig-mcp
+=======================================
+
+ig-mcp builds with external Go modules. Dependencies and their resolved versions
+are recorded in go.mod and go.sum (including the req/v3 replacement).
+
+mautrix/meta (Instagram client, go.mau.fi/mautrix-meta)
+  Source: https://github.com/mautrix/meta
+  License: GNU Affero General Public License version 3 (AGPL-3.0).
+  Copyright: the mautrix/meta authors and contributors.
+  This dependency is compiled into the distributed ig-mcp executable. The
+  project does not assert a linking exemption or alternative license grant.
+
+OpenAI Secure MCP Tunnel (github.com/openai/tunnel-client)
+  Source: https://github.com/openai/tunnel-client
+  License: Apache License, Version 2.0.
+  Copyright: the respective upstream copyright holders.
+
+These notices do not transfer ownership of upstream code, replace upstream
+LICENSE/NOTICE files, or cover every transitive dependency. Distributors must
+inspect the license terms and notices for all included module versions, retain
+the required attribution and license texts, and provide Corresponding Source
+as required by the AGPL and any other applicable licenses. The project-level
+AGPL-3.0 license text is provided in LICENSE.
