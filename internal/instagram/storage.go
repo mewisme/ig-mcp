@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -31,9 +32,22 @@ func ensurePrivateDir(path string) error {
 		return fmt.Errorf("create session directory: %w", err)
 	}
 	// No component may silently redirect the credential directory elsewhere.
+	// macOS uses system-managed /var -> /private/var and /tmp -> /private/tmp
+	// links. These are not user-controlled credential directory redirects.
 	for part := dir; ; part = filepath.Dir(part) {
 		info, err := os.Lstat(part)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		if err != nil {
+			return errors.New("instagram session directory has an unsafe path component")
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if runtime.GOOS != "darwin" || (part != "/var" && part != "/tmp") {
+				return errors.New("instagram session directory has an unsafe path component")
+			}
+			target, err := filepath.EvalSymlinks(part)
+			if err != nil || target != "/private"+part {
+				return errors.New("instagram session directory has an unsafe path component")
+			}
+		} else if !info.IsDir() {
 			return errors.New("instagram session directory has an unsafe path component")
 		}
 		if parent := filepath.Dir(part); parent == part {

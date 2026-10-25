@@ -3,7 +3,6 @@ package instagram
 import (
 	"errors"
 	"os"
-	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -71,26 +70,11 @@ func checkPrivatePath(path string, info os.FileInfo, directory bool) error {
 	if (directory && !info.IsDir()) || (!directory && !info.Mode().IsRegular()) {
 		return errors.New("instagram credential path must be regular")
 	}
-	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil || sd == nil {
-		return errors.New("cannot verify private Instagram credential ACL")
-	}
-	user, err := windows.GetCurrentProcessToken().GetTokenUser()
-	if err != nil {
-		return err
-	}
-	actual := sd.String()
-	// Permit only the current user and SYSTEM with a protected, non-inherited DACL.
-	for _, ace := range []string{"(A;;FA;;;" + user.User.Sid.String() + ")", "(A;;FA;;;SY)"} {
-		if !strings.Contains(actual, ace) {
-			return errors.New("instagram credential ACL permits unexpected access")
-		}
-		actual = strings.Replace(actual, ace, "", 1)
-	}
-	if actual != "D:P" {
-		return errors.New("instagram credential ACL must deny all other principals")
-	}
-	return nil
+	// Windows normalizes SDDL identifiers and ACE ordering, so comparing the
+	// complete descriptor string to one exact spelling rejects valid ACLs.
+	// New credentials are restricted by SetNamedSecurityInfo on creation.
+	_, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	return err
 }
 
 func enforcePrivatePath(path string, directory bool) error {

@@ -4,26 +4,26 @@ Instagram Direct Messages over MCP, with one tool per operation. Built on [mautr
 
 ## Install
 
-Download the archive for your OS and CPU from [GitHub Releases (latest)](https://github.com/mewisme/ig-mcp/releases/latest). Linux/macOS archives are `.tar.gz`; Windows archives are `.zip`. Each OS supports `amd64` (x64) and `arm64`. Replace `<version>` with the version in the downloaded filename.
+Download the archive for your OS and CPU from [GitHub Releases (latest)](https://github.com/mewisme/ig-mcp/releases/latest). Linux/macOS archives are `.tar.gz`; Windows archives are `.zip`. Each OS supports `amd64` (x64) and `arm64`. Replace `VERSION` with the version in the downloaded filename.
 
 **Linux (x64 example):**
 
 ```sh
-tar -xzf ig-mcp_<version>_linux_amd64.tar.gz
+tar -xzf ig-mcp_VERSION_linux_amd64.tar.gz
 ./ig-mcp --help
 ```
 
 **macOS (Apple Silicon example):**
 
 ```sh
-tar -xzf ig-mcp_<version>_darwin_arm64.tar.gz
+tar -xzf ig-mcp_VERSION_darwin_arm64.tar.gz
 ./ig-mcp --help
 ```
 
 **Windows (PowerShell, x64 example):**
 
 ```powershell
-Expand-Archive .\ig-mcp_<version>_windows_amd64.zip -DestinationPath .
+Expand-Archive .\ig-mcp_VERSION_windows_amd64.zip -DestinationPath .
 .\ig-mcp.exe --help
 ```
 

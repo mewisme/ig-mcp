@@ -118,15 +118,10 @@ func TestLoadRelativeCwdAndExplicitPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDotenv(t, filepath.Join(configDir, "other.env"), key+"=relative\n")
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relativeDir, err := filepath.Rel(wd, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := Load(relativeDir, filepath.Join("config", "other.env")); err != nil {
+	// GitHub Windows runners may place the checkout and TempDir on different
+	// volumes. Chdir tests relative resolution without cross-volume filepath.Rel.
+	t.Chdir(dir)
+	if err := Load(".", filepath.Join("config", "other.env")); err != nil {
 		t.Fatalf("Load relative paths: %v", err)
 	}
 	if got := os.Getenv(key); got != "relative" {
