@@ -188,12 +188,12 @@ func TestInitEnvPrintsUsableServeCommand(t *testing.T) {
 	t.Chdir(root)
 	output, err := execute(t, "init", "env", "custom.env", "--path", "nested")
 	path := filepath.Join(root, "nested", "custom.env")
-	if err != nil || !strings.Contains(output, "ig-mcp --env-path "+path+" serve") {
+	if err != nil || !strings.Contains(output, "ig-mcp --env-path "+quoteEnvPath(path)+" serve") {
 		t.Fatalf("custom env command: %q, %v", output, err)
 	}
 	output, err = execute(t, "init", "env", "another.env", "--path", "space directory")
 	withSpaces := filepath.Join(root, "space directory", "another.env")
-	quoted := "'" + withSpaces + "'"
+	quoted := quoteEnvPath(withSpaces)
 	if err != nil || !strings.Contains(output, "ig-mcp --env-path "+quoted+" serve") {
 		t.Fatalf("env path quoting: %q, %v", output, err)
 	}
