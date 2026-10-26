@@ -130,8 +130,8 @@ func TestRegisterToolsAndErrorContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 39 {
-		t.Fatalf("registered %d tools, want 39", len(list.Tools))
+	if len(list.Tools) != 40 {
+		t.Fatalf("registered %d tools, want 40", len(list.Tools))
 	}
 	seen := make(map[string]bool)
 	for _, tool := range list.Tools {
@@ -167,6 +167,43 @@ func TestRegisterToolsAndErrorContract(t *testing.T) {
 			}
 			if tool.Name == "ig_poll_events" && !strings.Contains(schema, "generation") {
 				t.Fatalf("poll_events schema missing generation: %s", schema)
+			}
+		}
+		if tool.Name == "ig_whoami" {
+			if !tool.Annotations.ReadOnlyHint || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
+				t.Fatal("whoami must be read-only and local-only")
+			}
+		}
+		if tool.Name == "ig_list_threads" {
+			encoded, _ := json.Marshal(tool.InputSchema)
+			if !strings.Contains(string(encoded), "unread_only") {
+				t.Fatalf("list_threads missing unread_only input: %s", encoded)
+			}
+		}
+		switch tool.Name {
+		case "ig_send_media", "ig_unsend_message", "ig_delete_thread", "ig_add_group_members", "ig_remove_group_member", "ig_pin_message", "ig_unpin_message":
+			encoded, err := json.Marshal(tool.InputSchema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var schema struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+				Required   []string                   `json:"required"`
+			}
+			if err := json.Unmarshal(encoded, &schema); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := schema.Properties["thread_id"]; !ok {
+				t.Fatalf("%s missing flexible thread_id: %s", tool.Name, encoded)
+			}
+			oldID := "thread_fbid"
+			if tool.Name == "ig_unsend_message" {
+				oldID = "thread_long_id"
+			}
+			for _, field := range schema.Required {
+				if field == oldID {
+					t.Fatalf("%s still requires %s even when thread_id is available", tool.Name, oldID)
+				}
 			}
 		}
 	}

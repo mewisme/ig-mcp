@@ -25,6 +25,19 @@ jobs:
           cache: true
       - run: go test ./...
       - run: go vet ./...
+      - name: Install UPX
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=5.2.1
+          archive="upx-${version}-amd64_linux.tar.xz"
+          curl -fsSL --retry 3 "https://github.com/upx/upx/releases/download/v${version}/${archive}" -o "$RUNNER_TEMP/$archive"
+          echo "402162aad30af47e60dbd767fb2e64ca394ace9727ba1f40283641f1d1b91657  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" "upx-${version}-amd64_linux/upx"
+          install -m 0755 "$RUNNER_TEMP/upx-${version}-amd64_linux/upx" "$RUNNER_TEMP/upx"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Verify UPX
+        run: upx --version
       - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser

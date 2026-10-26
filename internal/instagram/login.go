@@ -21,7 +21,7 @@ import (
 
 // Login authenticates via the CLI using configured environment values or
 // interactive prompts, and is never exposed through the MCP tool registry.
-// Supported methods: android (default), web, cookie. Android may still require
+// Supported methods: auto (default), android, web, cookie. Android may still require
 // a browser challenge; in that case use the cookie method after completing it
 // in the official Instagram website.
 func (s *Service) Login(ctx context.Context, method string) (loginErr error) {
@@ -40,14 +40,11 @@ func (s *Service) Login(ctx context.Context, method string) (loginErr error) {
 	if active {
 		return &LoginError{Kind: "already_active", message: "close the current client before starting a new login"}
 	}
-	method = strings.ToLower(strings.TrimSpace(method))
-	if method == "" {
-		method = "android"
-	}
+	method = resolveLoginMethod(method)
 	if method != "android" && method != "web" && method != "cookie" {
-		return &LoginError{Kind: "invalid_input", message: "login method must be android, web or cookie"}
+		return &LoginError{Kind: "invalid_input", message: "login method must be auto, android, web or cookie"}
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) && loginNeedsTerminal(method) {
 		return &LoginError{Kind: "terminal_required", message: "CLI login requires an interactive terminal; never pass credentials as command arguments"}
 	}
 	s.setStatus("connecting")
@@ -117,6 +114,30 @@ func (s *Service) Login(ctx context.Context, method string) (loginErr error) {
 		return &LoginError{Kind: "invalid_input", message: "Instagram session cookies identify inconsistent accounts"}
 	}
 	return s.activate(ctx, client)
+}
+
+// resolveLoginMethod selects cookie import first, then credential authentication.
+// Explicit methods never silently switch to another authentication mechanism.
+func resolveLoginMethod(method string) string {
+	method = strings.ToLower(strings.TrimSpace(method))
+	if method != "" && method != "auto" {
+		return method
+	}
+	if strings.TrimSpace(os.Getenv("IG_MCP_LOGIN_COOKIES")) != "" {
+		return "cookie"
+	}
+	return "android"
+}
+
+func loginNeedsTerminal(method string) bool {
+	switch method {
+	case "cookie":
+		return strings.TrimSpace(os.Getenv("IG_MCP_LOGIN_COOKIES")) == ""
+	case "android", "web":
+		return strings.TrimSpace(os.Getenv("IG_MCP_LOGIN_IDENTITY")) == "" || os.Getenv("IG_MCP_LOGIN_PASSWORD") == ""
+	default:
+		return true
+	}
 }
 
 func cookieMap(client *instameow.Client) map[string]string {

@@ -195,6 +195,35 @@ func (s *Service) Close() error {
 	return s.closeLocked()
 }
 
+// ForgetSession removes only local credentials. It never calls Instagram's
+// remote logout or revocation endpoints. Missing sessions are already forgotten.
+func (s *Service) ForgetSession() error {
+	s.lifecycle.Lock()
+	defer s.lifecycle.Unlock()
+	if err := s.closeLocked(); err != nil {
+		return err
+	}
+	s.diskMu.Lock()
+	defer s.diskMu.Unlock()
+	err := withSessionLock(s.path, func() error {
+		info, err := os.Lstat(s.path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := checkPrivatePath(s.path, info, false); err != nil {
+			return err
+		}
+		return os.Remove(s.path)
+	})
+	if err == nil {
+		s.setStatus("not_logged_in")
+	}
+	return err
+}
+
 func (s *Service) closeLocked() error {
 	s.mu.Lock()
 	c, cancel, stopped := s.client, s.cancel, s.stopped

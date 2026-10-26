@@ -27,7 +27,8 @@ type editInput struct {
 	ClientRequestID string `json:"client_request_id,omitempty" jsonschema:"Stable retry key"`
 }
 type unsendInput struct {
-	ThreadLongID string `json:"thread_long_id" jsonschema:"required,ThreadInfo.thread_id (long ID), not thread_fbid or IGID"`
+	ThreadID     string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_long_id when omitted"`
+	ThreadLongID string `json:"thread_long_id,omitempty" jsonschema:"ThreadInfo.thread_id (long ID); optional with thread_id"`
 	MessageID    string `json:"message_id" jsonschema:"required,Message ID to permanently unsend"`
 }
 type reactInput struct {
@@ -42,7 +43,8 @@ type markReadInput struct {
 	TimestampMS int64  `json:"timestamp_ms" jsonschema:"required,Target message timestamp in Unix milliseconds, needed for read validation"`
 }
 type deleteThreadInput struct {
-	ThreadFBID string `json:"thread_fbid" jsonschema:"required,ThreadInfo.thread_fbid, not IGID"`
+	ThreadID   string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID string `json:"thread_fbid,omitempty" jsonschema:"ThreadInfo.thread_fbid; optional with thread_id"`
 	MarkAsSpam bool   `json:"mark_as_spam,omitempty" jsonschema:"Move future requests to spam"`
 }
 type muteInput struct {
@@ -58,14 +60,17 @@ type blockInput struct {
 	UserID string `json:"user_id" jsonschema:"required,Instagram user ID (IGID) not FBID"`
 }
 type groupThreadInput struct {
-	ThreadFBID string `json:"thread_fbid" jsonschema:"required,ThreadInfo.thread_fbid"`
+	ThreadID   string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID string `json:"thread_fbid,omitempty" jsonschema:"ThreadInfo.thread_fbid; optional with thread_id"`
 }
 type groupMemberInput struct {
-	ThreadFBID string `json:"thread_fbid" jsonschema:"required,ThreadInfo.thread_fbid"`
+	ThreadID   string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID string `json:"thread_fbid,omitempty" jsonschema:"ThreadInfo.thread_fbid; optional with thread_id"`
 	UserIGID   string `json:"user_igid" jsonschema:"required,Instagram ID of member"`
 }
 type groupMembersInput struct {
-	ThreadFBID string   `json:"thread_fbid" jsonschema:"required,ThreadInfo.thread_fbid"`
+	ThreadID   string   `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID string   `json:"thread_fbid,omitempty" jsonschema:"ThreadInfo.thread_fbid; optional with thread_id"`
 	UserIGIDs  []string `json:"user_igids" jsonschema:"required,Instagram IDs of members"`
 }
 type groupCreateInput struct {
@@ -73,16 +78,19 @@ type groupCreateInput struct {
 	ClientRequestID string   `json:"client_request_id,omitempty" jsonschema:"Stable retry key"`
 }
 type renameGroupInput struct {
-	ThreadFBID string `json:"thread_fbid" jsonschema:"required,ThreadInfo.thread_fbid"`
+	ThreadID   string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID string `json:"thread_fbid,omitempty" jsonschema:"ThreadInfo.thread_fbid; optional with thread_id"`
 	Title      string `json:"title" jsonschema:"required,New group title"`
 }
 type acceptRequestInput struct {
-	ThreadFBID      string `json:"thread_fbid" jsonschema:"required,ThreadInfo.thread_fbid of message request"`
+	ThreadID        string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID      string `json:"thread_fbid,omitempty" jsonschema:"ThreadInfo.thread_fbid; optional with thread_id"`
 	Folder          string `json:"folder,omitempty" jsonschema:"Optional inbox folder for accepted message"`
 	ClientRequestID string `json:"client_request_id,omitempty" jsonschema:"Stable retry key"`
 }
 type pinMessageInput struct {
-	ThreadFBID       string `json:"thread_fbid" jsonschema:"required,ThreadInfo.thread_fbid"`
+	ThreadID         string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID       string `json:"thread_fbid,omitempty" jsonschema:"ThreadInfo.thread_fbid; optional with thread_id"`
 	MessageID        string `json:"message_id" jsonschema:"required,Message ID"`
 	ReplaceOldestPin bool   `json:"replace_oldest_pin,omitempty" jsonschema:"Replace oldest pinned message if pin limit reached"`
 }
@@ -160,13 +168,13 @@ func registerWriteTools(s *mcp.Server, svc *instagram.Service) {
 			}
 			return toolOutput{"message": resp.Message, "offline_threading_id": offlineID}, nil
 		})
-	addTool(s, svc, "ig_unsend_message", "Permanently unsend a message for participants. Requires long thread ID (ThreadInfo.thread_id).", false, true,
+	addTool(s, svc, "ig_unsend_message", "Permanently unsend a message for participants. Provide thread_long_id or thread_id (resolved from the server).", false, true,
 		func(ctx context.Context, c *instameow.Client, in unsendInput) (toolOutput, error) {
-			tid, err := required(in.ThreadLongID, "thread_long_id")
+			mid, err := required(in.MessageID, "message_id")
 			if err != nil {
 				return nil, err
 			}
-			mid, err := required(in.MessageID, "message_id")
+			tid, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadLongID, "thread_long_id")
 			if err != nil {
 				return nil, err
 			}
@@ -241,9 +249,9 @@ func registerWriteTools(s *mcp.Server, svc *instagram.Service) {
 			}
 			return toolOutput{"receipt": resp.ReadReceipt, "validated": validation.Validated}, nil
 		})
-	addTool(s, svc, "ig_delete_thread", "Delete/hide an Instagram conversation from inbox. Destructive; uses numeric thread_fbid.", false, true,
+	addTool(s, svc, "ig_delete_thread", "Delete/hide an Instagram conversation from inbox using thread_fbid or thread_id.", false, true,
 		func(ctx context.Context, c *instameow.Client, in deleteThreadInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
 			if err != nil {
 				return nil, err
 			}
@@ -342,13 +350,13 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 			}
 			return toolOutput{"thread": resp.Data, "offline_threading_id": offlineID}, nil
 		})
-	addTool(s, svc, "ig_add_group_members", "Add members to Instagram group using numeric thread_fbid and Instagram user IGIDs.", false, false,
+	addTool(s, svc, "ig_add_group_members", "Add members to Instagram group using thread_fbid or thread_id and Instagram user IGIDs.", false, false,
 		func(ctx context.Context, c *instameow.Client, in groupMembersInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
+			users, err := validIDs(in.UserIGIDs, "user_igids", 50)
 			if err != nil {
 				return nil, err
 			}
-			users, err := validIDs(in.UserIGIDs, "user_igids", 50)
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
 			if err != nil {
 				return nil, err
 			}
@@ -361,13 +369,13 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 			}
 			return toolOutput{"thread": resp.Thread}, nil
 		})
-	addTool(s, svc, "ig_remove_group_member", "Remove an Instagram group member by numeric thread_fbid and user IGID.", false, true,
+	addTool(s, svc, "ig_remove_group_member", "Remove an Instagram group member by thread_fbid or thread_id and user IGID.", false, true,
 		func(ctx context.Context, c *instameow.Client, in groupMemberInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
+			user, err := required(in.UserIGID, "user_igid")
 			if err != nil {
 				return nil, err
 			}
-			user, err := required(in.UserIGID, "user_igid")
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
 			if err != nil {
 				return nil, err
 			}
@@ -382,7 +390,7 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 		})
 	addTool(s, svc, "ig_leave_group", "Leave Instagram group DM using numeric thread_fbid. Destructive to local membership.", false, true,
 		func(ctx context.Context, c *instameow.Client, in groupThreadInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
 			if err != nil {
 				return nil, err
 			}
@@ -405,11 +413,11 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 		op := op
 		addTool(s, svc, op.name, op.desc, false, !op.add,
 			func(ctx context.Context, c *instameow.Client, in groupMembersInput) (toolOutput, error) {
-				id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
+				users, err := validIDs(in.UserIGIDs, "user_igids", 50)
 				if err != nil {
 					return nil, err
 				}
-				users, err := validIDs(in.UserIGIDs, "user_igids", 50)
+				id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
 				if err != nil {
 					return nil, err
 				}
@@ -436,16 +444,16 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 	}
 	addTool(s, svc, "ig_rename_group", "Replace Instagram group chat title using thread_fbid.", false, true,
 		func(ctx context.Context, c *instameow.Client, in renameGroupInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
-			if err != nil {
-				return nil, err
-			}
 			title, err := requiredText(in.Title, "title")
 			if err != nil {
 				return nil, err
 			}
 			if len(title) > 100 {
 				return nil, invalidf("title exceeds 100 bytes")
+			}
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
+			if err != nil {
+				return nil, err
 			}
 			if err := c.EditGroupTitle(ctx, id, title); err != nil {
 				return nil, err
@@ -454,15 +462,11 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 		})
 	addTool(s, svc, "ig_accept_message_request", "Accept pending Instagram DM request into inbox using thread_fbid.", false, true,
 		func(ctx context.Context, c *instameow.Client, in acceptRequestInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
-			if err != nil {
-				return nil, err
-			}
 			offlineID, err := stableRequestID(in.ClientRequestID, "ig_accept_message_request")
 			if err != nil {
 				return nil, err
 			}
-			req := &slidetypes.AcceptMessageRequestRequest{ThreadID: id, OfflineThreadingID: offlineID}
+			req := &slidetypes.AcceptMessageRequestRequest{OfflineThreadingID: offlineID}
 			if in.Folder != "" {
 				folder, err := normalizeInboxFolder(in.Folder)
 				if err != nil {
@@ -470,6 +474,11 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 				}
 				req.IGInboxFolder = &folder
 			}
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
+			if err != nil {
+				return nil, err
+			}
+			req.ThreadID = id
 			resp, err := c.AcceptMessageRequest(ctx, req)
 			if err != nil {
 				return nil, err
@@ -482,6 +491,10 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 	addTool(s, svc, "ig_pin_message", "Pin message in Instagram group using thread_fbid and message ID.", false, false,
 		func(ctx context.Context, c *instameow.Client, in pinMessageInput) (toolOutput, error) {
 			req, err := pinMessageRequest(in)
+			if err != nil {
+				return nil, err
+			}
+			req.ThreadID, err = resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
 			if err != nil {
 				return nil, err
 			}
@@ -500,6 +513,10 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 			if err != nil {
 				return nil, err
 			}
+			req.ThreadID, err = resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
+			if err != nil {
+				return nil, err
+			}
 			resp, err := c.UnpinMessage(ctx, req)
 			if err != nil {
 				return nil, err
@@ -512,9 +529,13 @@ func registerGroupTools(s *mcp.Server, svc *instagram.Service) {
 }
 
 func pinMessageRequest(in pinMessageInput) (*slidetypes.PinMessageRequest, error) {
-	id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
-	if err != nil {
-		return nil, err
+	id := ""
+	var err error
+	if in.ThreadFBID != "" {
+		id, err = positiveDecimalID(in.ThreadFBID, "thread_fbid")
+		if err != nil {
+			return nil, err
+		}
 	}
 	mid, err := required(in.MessageID, "message_id")
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -296,5 +297,111 @@ func TestTunnelConsoleErrorsDoNotShowProviderDetails(t *testing.T) {
 	}
 	if strings.Contains(text, "secret") || strings.Contains(err.Error(), "secret") {
 		t.Fatal("provider credentials leaked into terminal output")
+	}
+}
+
+func TestRunWithOptionsPreservesValidation(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		if err := RunWithOptions(nil, testServer(), "openai", verbose); err == nil || !strings.Contains(err.Error(), "context is nil") {
+			t.Fatalf("verbose=%v, nil context: %v", verbose, err)
+		}
+		t.Setenv("CONTROL_PLANE_TUNNEL_ID", "")
+		t.Setenv("CONTROL_PLANE_API_KEY", "secret-value")
+		if err := RunWithOptions(context.Background(), testServer(), "openai", verbose); err == nil || !strings.Contains(err.Error(), "CONTROL_PLANE_TUNNEL_ID") || strings.Contains(err.Error(), "secret-value") {
+			t.Fatalf("verbose=%v, missing ID: %v", verbose, err)
+		}
+	}
+}
+
+func TestTunnelSDKLoggingDefaultSilent(t *testing.T) {
+	var output bytes.Buffer
+	level, writer := tunnelLogging(false, &output)
+	if level != slog.LevelError {
+		t.Fatalf("default SDK level = %v, want error", level)
+	}
+	_, _ = writer.Write([]byte("time=now level=ERROR msg=failed status=401 api_key=SECRET-API-KEY\n"))
+	if output.Len() != 0 {
+		t.Fatalf("default must suppress raw SDK logs: %s", output.String())
+	}
+}
+
+func TestTunnelSDKVerboseClassificationAndRedaction(t *testing.T) {
+	var output bytes.Buffer
+	level, writer := tunnelLogging(true, &output)
+	if level != slog.LevelInfo {
+		t.Fatalf("verbose SDK level = %v, want info", level)
+	}
+	lines := []string{
+		`time=now level=ERROR msg="control-plane request failed" status=401 tunnel_id=SECRET-TUNNEL api_key=SECRET-API cookie=SECRET-COOKIE authorization="Bearer SECRET-BEARER"`,
+		`{"level":"WARN","msg":"poll timed out","request_id":"SECRET-REQUEST","session":"SECRET-SESSION"}`,
+		`time=now level=INFO msg="reconnecting to control plane" tunnel_id=SECRET-TUNNEL`,
+		`time=now level=ERROR msg="upstream 503" status_code=503 response="SECRET-PAYLOAD"`,
+		`time=now level=ERROR msg="x509: unknown authority" api_key=SECRET-API`,
+		`time=now level=INFO msg="successful idle poll"`,
+	}
+	for _, line := range lines {
+		_, _ = writer.Write([]byte(line + "\n"))
+	}
+	text := output.String()
+	for _, want := range []string{"HTTP 401", "request timed out", "connection retry scheduled", "HTTP 503", "TLS verification"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing classified diagnostic %q in %q", want, text)
+		}
+	}
+	for _, forbidden := range []string{"SECRET-", "tunnel_id=", "api_key=", "cookie=", "authorization=", "request_id=", "level=", "time=", "{\"level\"", "successful idle poll"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("raw SDK field or credential %q exposed in %q", forbidden, text)
+		}
+	}
+}
+
+func TestTunnelSDKVerboseChunkingAndOversize(t *testing.T) {
+	var output bytes.Buffer
+	_, writer := tunnelLogging(true, &output)
+	_, _ = writer.Write([]byte("level=ERROR msg=failed status="))
+	if output.Len() != 0 {
+		t.Fatalf("incomplete record was emitted: %q", output.String())
+	}
+	_, _ = writer.Write([]byte("429 api_key=SECRET-API\n"))
+	_, _ = writer.Write([]byte("level=WARN msg=" + strings.Repeat("SECRET-COOKIE", maxTunnelLogLine) + "\n"))
+	text := output.String()
+	if !strings.Contains(text, "HTTP 429") || !strings.Contains(text, "oversized SDK diagnostic omitted") || strings.Contains(text, "SECRET-") {
+		t.Fatalf("chunked or oversized SDK diagnostics unsafe: %q", text)
+	}
+}
+
+func TestTunnelErrorVerboseReasonIsSafe(t *testing.T) {
+	providerErr := errors.New("HTTP 403: rejected API_KEY=SECRET-API cookie=SECRET-COOKIE tunnel_id=SECRET-TUNNEL")
+	quiet := tunnelError("poll", providerErr, false)
+	verbose := tunnelError("poll", providerErr, true)
+	if strings.Contains(quiet.Error(), "HTTP 403") || !strings.Contains(verbose.Error(), "HTTP 403") || !strings.Contains(verbose.Error(), "access denied") {
+		t.Fatalf("unexpected verbosity difference: quiet=%v verbose=%v", quiet, verbose)
+	}
+	for _, err := range []error{quiet, verbose} {
+		if strings.Contains(err.Error(), "SECRET-") || strings.Contains(err.Error(), "API_KEY=") || strings.Contains(err.Error(), "tunnel_id=") {
+			t.Fatalf("provider details exposed: %v", err)
+		}
+	}
+	if err := tunnelError("poll", context.DeadlineExceeded, true); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("lost timeout identity: %v", err)
+	}
+}
+
+func TestTunnelVerboseSlowReadinessIsNotFatal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := newFakeTunnel()
+	var output bytes.Buffer
+	go func() {
+		time.Sleep(45 * time.Millisecond)
+		close(f.ready)
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	if err := runOpenAILifecycleWithOptions(ctx, serveUntilCanceled, f, 10*time.Millisecond, time.Second, &output, true); err != nil {
+		t.Fatalf("verbose readiness notice must not stop retries: %v", err)
+	}
+	if !strings.Contains(output.String(), "still connecting") || !strings.Contains(output.String(), "connected. Waiting") {
+		t.Fatalf("unexpected verbose readiness flow: %q", output.String())
 	}
 }

@@ -19,6 +19,27 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
+      - -X go.mewis.me/ig-mcp/internal/cli.Version={{ .Version }} -X go.mewis.me/ig-mcp/internal/cli.Commit={{ .Commit }} -X go.mewis.me/ig-mcp/internal/cli.Date={{ .Date }}
+
+# UPX supports these targets; keep macOS and Windows arm64 uncompressed.
+upx:
+  - enabled: true
+    ids:
+      - ig-mcp
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    compress: 5
+  - enabled: true
+    ids:
+      - ig-mcp
+    goos:
+      - windows
+    goarch:
+      - amd64
+    compress: 5
 
 archives:
   - id: ig-mcp-archives

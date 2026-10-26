@@ -17,6 +17,7 @@ type inboxInput struct {
 	Cursor             string `json:"cursor,omitempty" jsonschema:"Pagination cursor from previous response"`
 	Folder             string `json:"folder,omitempty" jsonschema:"Inbox folder (default INBOX); other folders use pagination API"`
 	IncludeProfilePics bool   `json:"include_profile_pics,omitempty" jsonschema:"Include participant profile picture URLs in user listings (default false)"`
+	UnreadOnly         bool   `json:"unread_only,omitempty" jsonschema:"For ig_list_threads only, return only marked-as-unread threads; limit counts matching threads"`
 }
 
 type threadInput struct {
@@ -89,8 +90,17 @@ func summarizeThread(t *slidetypes.ThreadInfo) threadSummary {
 }
 
 func registerReadTools(s *mcp.Server, svc *instagram.Service) {
-	addTool(s, svc, "ig_list_threads", "List compact Instagram DM thread summaries (IDs, participants, title, activity and flags), without messages or receipts. Use ig_get_thread for the entire upstream thread object.", true, false,
+	addTool(s, svc, "ig_list_threads", "List compact Instagram DM thread summaries, optionally filtering unread_only across paginated inbox pages. Use ig_get_thread for the entire upstream thread object.", true, false,
 		func(ctx context.Context, c *instameow.Client, in inboxInput) (toolOutput, error) {
+			if in.UnreadOnly {
+				threads, cursor, more, err := listUnreadThreads(ctx, in, func(ctx context.Context, page inboxInput) (slidetypes.Edged[slidetypes.Node[slidetypes.WrappedThreadInfo]], error) {
+					return fetchInbox(ctx, c, page)
+				})
+				if err != nil {
+					return nil, err
+				}
+				return toolOutput{"threads": threads, "count": len(threads), "next_cursor": cursor, "has_more": more}, nil
+			}
 			edges, err := fetchInbox(ctx, c, in)
 			if err != nil {
 				return nil, err
@@ -236,6 +246,63 @@ func registerReadTools(s *mcp.Server, svc *instagram.Service) {
 			}
 			return toolOutput{"users": users, "count": len(users)}, nil
 		})
+}
+
+// Filter before applying the caller's result limit. Scan a bounded number of
+// upstream pages to avoid unbounded remote work for an inbox with no unread DMs;
+// the returned cursor can resume the scan without skipping any unvisited edge.
+func listUnreadThreads(ctx context.Context, in inboxInput, fetch func(context.Context, inboxInput) (slidetypes.Edged[slidetypes.Node[slidetypes.WrappedThreadInfo]], error)) ([]threadSummary, string, bool, error) {
+	n, err := boundedLimit(in.Limit)
+	if err != nil {
+		return nil, "", false, err
+	}
+	if err := checkCursor(in.Cursor); err != nil {
+		return nil, "", false, err
+	}
+	if _, err := normalizeInboxFolder(in.Folder); err != nil {
+		return nil, "", false, err
+	}
+	result := make([]threadSummary, 0, n)
+	cursor := in.Cursor
+	for scanned := 0; scanned < 20; scanned++ {
+		if err := ctx.Err(); err != nil {
+			return nil, "", false, err
+		}
+		in.Cursor = cursor
+		in.Limit = n
+		page, err := fetch(ctx, in)
+		if err != nil {
+			return nil, "", false, err
+		}
+		for i, edge := range page.Edges {
+			if t := edge.Node.AsIGDirectThread; t != nil && t.MarkedAsUnread {
+				result = append(result, summarizeThread(t))
+			}
+			if len(result) == n {
+				more := i+1 < len(page.Edges) || page.PageInfo.HasNextPage
+				if !more {
+					return result, "", false, nil
+				}
+				next := page.PageInfo.EndCursor
+				if i+1 < len(page.Edges) {
+					next = edge.Cursor
+				}
+				if next == "" || next == cursor || checkCursor(next) != nil {
+					return nil, "", false, fmt.Errorf("invalid upstream pagination cursor")
+				}
+				return result, next, true, nil
+			}
+		}
+		if !page.PageInfo.HasNextPage {
+			return result, "", false, nil
+		}
+		next := page.PageInfo.EndCursor
+		if len(page.Edges) == 0 || next == "" || next == cursor || checkCursor(next) != nil {
+			return nil, "", false, fmt.Errorf("invalid upstream pagination cursor")
+		}
+		cursor = next
+	}
+	return result, cursor, true, nil
 }
 
 func fetchInbox(ctx context.Context, c *instameow.Client, in inboxInput) (slidetypes.Edged[slidetypes.Node[slidetypes.WrappedThreadInfo]], error) {

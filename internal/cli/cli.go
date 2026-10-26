@@ -20,19 +20,23 @@ import (
 
 // NewRootCommand builds a fresh Cobra command tree so it can be tested without
 // reusing mutable flag state. No session or .env file is loaded until execution.
-func NewRootCommand() *cobra.Command {
+func NewRootCommand(envExample string) *cobra.Command {
 	var envPath string
 	root := &cobra.Command{
 		Use:           "ig-mcp",
 		Short:         "Instagram-only MCP server",
 		Long:          "Instagram Direct Messages over MCP. Authenticate interactively using the CLI; MCP tools never expose login or logout.",
+		Version:       versionText(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return cmd.Help()
 		},
-		PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.Name() == "doctor" || cmd.Name() == "version" || (cmd.Name() == "env" && cmd.Parent() != nil && cmd.Parent().Name() == "init") {
+				return nil
+			}
 			cwd, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("determine working directory: %w", err)
@@ -40,8 +44,9 @@ func NewRootCommand() *cobra.Command {
 			return envloader.Load(cwd, envPath)
 		},
 	}
+	root.SetVersionTemplate("{{.Version}}\n")
 	root.PersistentFlags().StringVar(&envPath, "env-path", "", "Additional dotenv file to load after .env and .env.local (inherited environment wins)")
-	root.AddCommand(newLoginCommand(), newStatusCommand(), newServeCommand())
+	root.AddCommand(newInitCommand(envExample), newVersionCommand(), newDoctorCommand(&envPath), newLoginCommand(), newLogoutCommand(), newStatusCommand(), newServeCommand())
 	return root
 }
 
@@ -53,9 +58,9 @@ func newLoginCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			switch method {
-			case "android", "web", "cookie":
+			case "auto", "android", "web", "cookie":
 			default:
-				return fmt.Errorf("unsupported login method %q (use android, web or cookie)", method)
+				return fmt.Errorf("unsupported login method %q (use auto, cookie, android or web)", method)
 			}
 			svc := instagram.New()
 			if err := svc.Login(cmd.Context(), method); err != nil {
@@ -71,7 +76,7 @@ func newLoginCommand() *cobra.Command {
 			return writeLoginConfirmation(cmd.OutOrStdout(), account)
 		},
 	}
-	cmd.Flags().StringVar(&method, "method", "android", "Instagram authentication method: android, web or cookie")
+	cmd.Flags().StringVar(&method, "method", "auto", "Instagram authentication: auto (cookie if configured, otherwise android), cookie, android or web")
 	return cmd
 }
 
@@ -182,13 +187,14 @@ func sessionStatusCause(state string) string {
 
 func newServeCommand() *cobra.Command {
 	var mode string
+	var verbose bool
 	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the Instagram MCP server via OpenAI Tunnel or stdio",
+		Short: "Run the Instagram MCP server via OpenAI Tunnel, Cloudflare or stdio",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) (result error) {
-			if mode != "openai" && mode != "stdio" {
-				return fmt.Errorf("unsupported transport %q (use openai or stdio)", mode)
+			if mode != "openai" && mode != "stdio" && mode != "cloudflare" && mode != "cf" {
+				return fmt.Errorf("unsupported transport %q (use openai, cloudflare, cf or stdio)", mode)
 			}
 			svc := instagram.New()
 			if err := svc.Open(cmd.Context()); err != nil {
@@ -200,11 +206,12 @@ func newServeCommand() *cobra.Command {
 				}
 			}()
 
-			server := mcp.NewServer(&mcp.Implementation{Name: "instagram-mcp", Version: "0.1.0"}, nil)
+			server := mcp.NewServer(&mcp.Implementation{Name: "instagram-mcp", Version: releaseVersion()}, nil)
 			mcptools.Register(server, svc)
-			return transport.Run(cmd.Context(), server, mode)
+			return transport.RunWithOptions(cmd.Context(), server, mode, verbose)
 		},
 	}
-	cmd.Flags().StringVar(&mode, "transport", "openai", "MCP transport: openai or stdio")
+	cmd.Flags().StringVar(&mode, "transport", "openai", "MCP transport: openai, cloudflare (cf) or stdio")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show safe, concise OpenAI Tunnel diagnostics")
 	return cmd
 }

@@ -1,4 +1,4 @@
-// Package transport serves an MCP server through stdio or OpenAI Secure MCP Tunnel.
+// Package transport serves an MCP server through stdio, OpenAI Tunnel, or Cloudflare.
 package transport
 
 import (
@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -30,8 +29,14 @@ type tunnelLifecycle interface {
 }
 
 // Run blocks until the MCP connection ends, the tunnel shuts down, or ctx is cancelled.
-// OpenAI mode uses only in-memory MCP transports; it does not open a local listener.
+// OpenAI and Cloudflare modes use in-memory transports; neither opens a local listener.
 func Run(ctx context.Context, server *mcp.Server, mode string) error {
+	return RunWithOptions(ctx, server, mode, false)
+}
+
+// RunWithOptions serves MCP using the requested transport. Verbose OpenAI
+// diagnostics are classified and redacted; raw SDK log records are never shown.
+func RunWithOptions(ctx context.Context, server *mcp.Server, mode string, verbose bool) error {
 	if ctx == nil {
 		return errors.New("transport: context is nil")
 	}
@@ -54,27 +59,30 @@ func Run(ctx context.Context, server *mcp.Server, mode string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		return runOpenAI(ctx, server, id, key)
+		return runOpenAI(ctx, server, id, key, verbose)
+	case "cloudflare", "cf":
+		return runCloudflare(ctx, server)
 	default:
-		return fmt.Errorf("transport: unsupported mode %q (want openai or stdio)", mode)
+		return fmt.Errorf("transport: unsupported mode %q (want openai, cloudflare, or stdio)", mode)
 	}
 }
 
-func runOpenAI(ctx context.Context, server *mcp.Server, id, key string) (result error) {
+func runOpenAI(ctx context.Context, server *mcp.Server, id, key string, verbose bool) (result error) {
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	// The upstream SDK emits structured key-value logs by default. The CLI
-	// provides concise lifecycle messages instead, without printing credentials.
+	// SDK messages can contain credentials or remote payloads; never pass them
+	// through to the terminal, even in verbose mode.
+	logLevel, logWriter := tunnelLogging(verbose, os.Stderr)
 	client, err := tunnelclient.New(tunnelclient.Config{
 		TunnelID: id, APIKey: key,
-		LogLevel: slog.LevelError, LogWriter: io.Discard,
+		LogLevel: logLevel, LogWriter: logWriter,
 	}, clientTransport)
 	if err != nil {
 		// The upstream validation error may embed user-supplied credentials.
-		return safeTunnelError("create OpenAI tunnel (check tunnel ID and API key)", err)
+		return tunnelError("create OpenAI tunnel (check tunnel ID and API key)", err, verbose)
 	}
-	return runOpenAILifecycle(ctx, func(serverCtx context.Context) error {
+	return runOpenAILifecycleWithOptions(ctx, func(serverCtx context.Context) error {
 		return server.Run(serverCtx, serverTransport)
-	}, client, connectionNoticeDelay, shutdownTimeout)
+	}, client, connectionNoticeDelay, shutdownTimeout, os.Stderr, verbose)
 }
 
 // runOpenAILifecycle accepts an offline fake tunnel and server for deterministic
@@ -84,6 +92,10 @@ func runOpenAILifecycle(ctx context.Context, serve func(context.Context) error, 
 }
 
 func runOpenAILifecycleWithOutput(ctx context.Context, serve func(context.Context) error, client tunnelLifecycle, noticeDelay, stopTimeout time.Duration, output io.Writer) (result error) {
+	return runOpenAILifecycleWithOptions(ctx, serve, client, noticeDelay, stopTimeout, output, false)
+}
+
+func runOpenAILifecycleWithOptions(ctx context.Context, serve func(context.Context) error, client tunnelLifecycle, noticeDelay, stopTimeout time.Duration, output io.Writer, verbose bool) (result error) {
 	notice := func(message string) {
 		_, _ = fmt.Fprintln(output, "OpenAI Tunnel: "+message)
 	}
@@ -100,7 +112,7 @@ func runOpenAILifecycleWithOutput(ctx context.Context, serve func(context.Contex
 		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), stopTimeout)
 		defer cancelShutdown()
 		if err := client.Stop(shutdownCtx); err != nil {
-			result = errors.Join(result, safeTunnelError("stop OpenAI tunnel", err))
+			result = errors.Join(result, tunnelError("stop OpenAI tunnel", err, verbose))
 		}
 		if !serverExited {
 			serverWaitCtx, cancelWait := context.WithTimeout(context.Background(), stopTimeout)
@@ -125,7 +137,7 @@ func runOpenAILifecycleWithOutput(ctx context.Context, serve func(context.Contex
 		if ctx.Err() != nil {
 			return nil
 		}
-		return safeTunnelError("start OpenAI tunnel", err)
+		return tunnelError("start OpenAI tunnel", err, verbose)
 	}
 
 	ready := make(chan error, 1)
@@ -146,7 +158,7 @@ func runOpenAILifecycleWithOutput(ctx context.Context, serve func(context.Contex
 				if ctx.Err() != nil {
 					return nil
 				}
-				return safeTunnelError("wait for OpenAI tunnel readiness", err)
+				return tunnelError("wait for OpenAI tunnel readiness", err, verbose)
 			}
 			goto connected
 		case <-reminder:

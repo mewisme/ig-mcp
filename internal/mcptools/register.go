@@ -22,6 +22,7 @@ import (
 // Register installs Instagram-only tools. Session creation and login are CLI concerns.
 func Register(server *mcp.Server, svc *instagram.Service) {
 	registerPingTool(server, svc)
+	registerWhoamiTool(server, svc)
 	registerReadTools(server, svc)
 	registerWriteTools(server, svc)
 	registerExtraTools(server, svc)

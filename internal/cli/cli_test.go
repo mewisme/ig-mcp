@@ -12,7 +12,7 @@ import (
 
 func execute(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	cmd := NewRootCommand()
+	cmd := NewRootCommand("CONTROL_PLANE_TUNNEL_ID=\nCONTROL_PLANE_API_KEY=\n")
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	cmd.SetErr(&output)
@@ -193,5 +193,72 @@ func TestStatusVerboseIdentifiesInsecureSessionFile(t *testing.T) {
 	}
 	if strings.Contains(out, "not private") == false && strings.Contains(out, "malformed") == false {
 		t.Fatalf("missing useful safe diagnosis: %q", out)
+	}
+}
+
+func TestInitEnvDefaultAndNoOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	output, err := execute(t, "init", "env")
+	if err != nil || !strings.Contains(output, ".env.local") {
+		t.Fatalf("init env: output=%q error=%v", output, err)
+	}
+	path := filepath.Join(dir, ".env.local")
+	content, err := os.ReadFile(path)
+	if err != nil || string(content) != "CONTROL_PLANE_TUNNEL_ID=\nCONTROL_PLANE_API_KEY=\n" {
+		t.Fatalf("wrong template: %q, %v", content, err)
+	}
+	_, err = execute(t, "init", "env")
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("existing file must not be overwritten: %v", err)
+	}
+	content, err = os.ReadFile(path)
+	if err != nil || string(content) != "CONTROL_PLANE_TUNNEL_ID=\nCONTROL_PLANE_API_KEY=\n" {
+		t.Fatalf("existing file modified: %q, %v", content, err)
+	}
+}
+
+func TestInitEnvFilenameAndDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	output, err := execute(t, "init", "env", "production.env", "--path", "config/nested")
+	if err != nil {
+		t.Fatalf("init with filename and directory: %v", err)
+	}
+	path := filepath.Join(dir, "config", "nested", "production.env")
+	if !strings.Contains(output, path) {
+		t.Fatalf("did not print created path: %q", output)
+	}
+	if content, err := os.ReadFile(path); err != nil || !strings.Contains(string(content), "CONTROL_PLANE_API_KEY=") {
+		t.Fatalf("missing initialized file: %v", err)
+	}
+	if _, err := execute(t, "init", "env", "-p", filepath.Join(dir, "other")); err != nil {
+		t.Fatalf("init default filename with absolute directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "other", ".env.local")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInitEnvValidationDoesNotLoadExistingDotenv(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(".env", []byte("this is invalid dotenv\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Initialization must work before the user has a valid dotenv configuration.
+	if _, err := execute(t, "init", "env", "--env-path", "does-not-exist"); err != nil {
+		t.Fatalf("init should not load any dotenv files: %v", err)
+	}
+	for _, args := range [][]string{
+		{"init", "env", "../escape"},
+		{"init", "env", "nested/name.env"},
+		{"init", "env", ".."},
+		{"init", "env", ""},
+		{"init", "env", "name.env", "other.env"},
+	} {
+		if _, err := execute(t, args...); err == nil {
+			t.Errorf("expected invalid env command arguments %q to fail", args)
+		}
 	}
 }

@@ -31,7 +31,7 @@ type replyInput struct {
 
 type mediaInput struct {
 	ThreadID        string `json:"thread_id" jsonschema:"required,Instagram ThreadInfo.id"`
-	ThreadFBID      string `json:"thread_fbid" jsonschema:"required,Numeric ThreadInfo.thread_fbid needed for upload"`
+	ThreadFBID      string `json:"thread_fbid,omitempty" jsonschema:"Optional numeric ThreadInfo.thread_fbid; resolved from thread_id if omitted"`
 	Filename        string `json:"filename" jsonschema:"required,Media filename without directories"`
 	MIMEType        string `json:"mime_type,omitempty" jsonschema:"Content type such as image/jpeg, video/mp4, audio/ogg"`
 	DataBase64      string `json:"data_base64" jsonschema:"required,Base64 media content, maximum 5 MiB decoded"`
@@ -47,7 +47,8 @@ type reactionRemoveInput struct {
 }
 
 type groupAvatarInput struct {
-	ThreadFBID  string `json:"thread_fbid" jsonschema:"required,Numeric ThreadInfo.thread_fbid"`
+	ThreadID    string `json:"thread_id,omitempty" jsonschema:"ThreadInfo.id; resolves thread_fbid when omitted"`
+	ThreadFBID  string `json:"thread_fbid,omitempty" jsonschema:"Numeric ThreadInfo.thread_fbid; optional with thread_id"`
 	ImageBase64 string `json:"image_base64" jsonschema:"required,Base64 encoded image, up to 5 MiB"`
 }
 
@@ -214,14 +215,6 @@ func registerExtraTools(s *mcp.Server, svc *instagram.Service) {
 			if err != nil {
 				return nil, err
 			}
-			fbid, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
-			if err != nil {
-				return nil, err
-			}
-			threadFBID, err := strconv.ParseInt(fbid, 10, 64)
-			if err != nil || threadFBID <= 0 {
-				return nil, invalidf("thread_fbid must be a positive decimal ID")
-			}
 			name, err := required(in.Filename, "filename")
 			if err != nil {
 				return nil, err
@@ -249,14 +242,15 @@ func registerExtraTools(s *mcp.Server, svc *instagram.Service) {
 			if err != nil {
 				return nil, err
 			}
-			// Server-side resolve: caller-provided IDs must refer to the same chat.
-			info, err := getThreadDetails(ctx, c, threadInput{ThreadID: thread})
+			// Verify matching IDs, or resolve the omitted FBID, only after
+			// validating all local inputs and media bytes.
+			fbid, err := resolveMediaFBID(ctx, c, thread, in.ThreadFBID)
 			if err != nil {
 				return nil, err
 			}
-			resolved, err := positiveDecimalID(info.ThreadFBID, "thread_fbid")
-			if err != nil || resolved != fbid {
-				return nil, invalidf("thread_id and thread_fbid refer to different conversations")
+			threadFBID, err := strconv.ParseInt(fbid, 10, 64)
+			if err != nil || threadFBID <= 0 {
+				return nil, invalidf("thread_fbid must be a positive decimal ID")
 			}
 			upload, err := c.GetHTTP().SendMercuryUploadRequest(ctx, threadFBID, &httpclient.MercuryUploadMedia{
 				Filename: name, MimeType: mime, MediaData: data, IsVoiceClip: in.Voice,
@@ -300,16 +294,16 @@ func registerExtraTools(s *mcp.Server, svc *instagram.Service) {
 		})
 	addTool(s, svc, "ig_edit_group_avatar", "Replace group chat avatar using base64 image bytes (max 5 MiB).", false, true,
 		func(ctx context.Context, c *instameow.Client, in groupAvatarInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
-			if err != nil {
-				return nil, err
-			}
 			data, err := decodeMedia(in.ImageBase64)
 			if err != nil {
 				return nil, err
 			}
 			if typ := http.DetectContentType(data); typ != "image/jpeg" && typ != "image/png" && typ != "image/gif" && typ != "image/webp" {
 				return nil, invalidf("group avatar must be a supported raster image")
+			}
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
+			if err != nil {
+				return nil, err
 			}
 			if err := c.EditGroupAvatar(ctx, id, data); err != nil {
 				return nil, err
@@ -318,7 +312,7 @@ func registerExtraTools(s *mcp.Server, svc *instagram.Service) {
 		})
 	addTool(s, svc, "ig_remove_group_avatar", "Remove an Instagram group chat avatar.", false, true,
 		func(ctx context.Context, c *instameow.Client, in groupThreadInput) (toolOutput, error) {
-			id, err := positiveDecimalID(in.ThreadFBID, "thread_fbid")
+			id, err := resolveThreadID(ctx, c, in.ThreadID, in.ThreadFBID, "thread_fbid")
 			if err != nil {
 				return nil, err
 			}
